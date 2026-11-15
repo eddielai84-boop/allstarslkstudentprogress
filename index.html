@@ -1678,9 +1678,9 @@
       adminEditingTarget: null, // { commentId, studentId, subjectKey }
       adminDeletingTarget: null, // { commentId, studentId, subjectKey }
       pendingTargetAfterLogin: null, // { view: 'teacher_eval', studentId: 'AS-401', subjectKey: 'BM' }
-      // 💡 若部署到 Vercel / GitHub Pages 给多台手机共用，可直接把您的 Apps Script /exec 网址填在下方引号内：
-      sheetsWebhookUrl: '',
-      lastSheetsSyncTime: '2026-11-15 16:30:00',
+      // 已内嵌您的 Google Apps Script Web App 部署网址，所有设备打开即可自动双向同步：
+      sheetsWebhookUrl: 'https://script.google.com/macros/s/AKfycbwjoAMv0qDwKQB6aXV1LnaewhvjEZXzJXsvczdYbnDyrXTpk1wIH4lOsN_LvnkgZnBU/exec',
+      lastSheetsSyncTime: '2026-11-16 07:51:00',
       allCommentsLog: [] // Full historical log synced to Google Sheets (unbounded)
     };
 
@@ -2034,7 +2034,7 @@
         const savedSheetsCfg = localStorage.getItem(STORAGE_KEY_SHEETS_CONFIG);
         if (savedSheetsCfg) {
           const parsedCfg = JSON.parse(savedSheetsCfg);
-          if (parsedCfg.sheetsWebhookUrl) state.sheetsWebhookUrl = parsedCfg.sheetsWebhookUrl;
+          state.sheetsWebhookUrl = (parsedCfg.sheetsWebhookUrl || '').trim() || 'https://script.google.com/macros/s/AKfycbwjoAMv0qDwKQB6aXV1LnaewhvjEZXzJXsvczdYbnDyrXTpk1wIH4lOsN_LvnkgZnBU/exec';
           if (parsedCfg.lastSheetsSyncTime) state.lastSheetsSyncTime = parsedCfg.lastSheetsSyncTime;
         }
       } catch (err) {
