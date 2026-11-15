@@ -280,7 +280,10 @@
           </div>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="pullLatestDataFromGoogleSheets(true)" class="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold text-xs sm:text-sm transition flex items-center gap-1.5">
+            <span>🔄 从 Google Sheets 同步最新名单</span>
+          </button>
           <button onclick="printGradeBatchReports()" class="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs sm:text-sm transition flex items-center gap-1.5">
             <span>🖨️ 批量打印当前名单成绩单</span>
           </button>
@@ -1074,7 +1077,7 @@
           <input
             id="sheetsWebhookUrlInput"
             type="url"
-            placeholder="https://script.google.com/macros/s/AKfycbzLu-RKVI813_Vur5RP-L36p0mgEwmQy4NlilA5vA39ZQq9j59mXsmM6fvPpQHT7Tft/exec"
+            placeholder="https://script.google.com/macros/s/AKfycb.../exec"
             class="flex-1 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
           <button type="button" onclick="saveSheetsWebhookUrl()" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-sm transition whitespace-nowrap">
@@ -1095,17 +1098,42 @@
           </button>
         </div>
         <pre id="appsScriptCodeBlock" class="bg-slate-900 text-emerald-300 p-3.5 rounded-2xl text-[11px] font-mono overflow-x-auto leading-relaxed">function doPost(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet();
-  var logTab = sheet.getSheetByName('All_Comments_Log') || sheet.insertSheet('All_Comments_Log');
-  if (logTab.getLastRow() === 0) {
-    logTab.appendRow(['记录时间点', '学号', '学生姓名', '年级', '班级', '科目代码', '科目名称', '分数', '课堂专注', '功课完成', '课堂互动', '评估老师', '老师评论内容']);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var headers = ['评论ID', '记录时间点', '学号', '学生姓名', '年级', '班级', '科目代码', '科目名称', '分数', '课堂专注', '功课完成', '课堂互动', '评估老师', '老师评论内容', '状态/备注'];
+    var logTab = ss.getSheetByName('All_Comments_Log') || ss.insertSheet('All_Comments_Log');
+    if (logTab.getLastRow() === 0) {
+      logTab.appendRow(headers);
+      logTab.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#b91c1c').setFontColor('#ffffff');
+      logTab.setFrozenRows(1);
+    }
+    var payload = JSON.parse(e.postData.contents);
+    var rows = Array.isArray(payload.records) ? payload.records : [payload];
+    rows.forEach(function(r) {
+      if (!r || !r.comment) return;
+      var cid = r.id || ('CMT-' + r.studentId + '-' + r.subjectKey + '-' + new Date().getTime());
+      var lastRow = logTab.getLastRow();
+      var existingRow = -1;
+      if (lastRow >= 2) {
+        var ids = logTab.getRange(2, 1, lastRow - 1, 1).getValues();
+        for (var i = 0; i < ids.length; i++) {
+          if (String(ids[i][0]) === String(cid)) { existingRow = i + 2; break; }
+        }
+      }
+      if (r.action === 'MASTER_ADMIN_DELETE') {
+        if (existingRow !== -1) logTab.deleteRow(existingRow);
+        return;
+      }
+      var vals = [cid, r.timestamp, r.studentId, r.studentName, r.grade, r.className, r.subjectKey, r.subjectName, r.score, r.focus, r.homework, r.participation, r.teacher, r.comment, r.action === 'MASTER_ADMIN_EDIT' ? 'Admin已修改' : '正常同步'];
+      if (existingRow !== -1) logTab.getRange(existingRow, 1, 1, vals.length).setValues([vals]);
+      else logTab.appendRow(vals);
+    });
+    return ContentService.createTextOutput(JSON.stringify({ status: 'ok', count: rows.length })).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
   }
-  var data = JSON.parse(e.postData.contents);
-  var rows = Array.isArray(data.records) ? data.records : [data];
-  rows.forEach(function(r) {
-    logTab.appendRow([r.timestamp, r.studentId, r.studentName, r.grade, r.className, r.subjectKey, r.subjectName, r.score, r.focus, r.homework, r.participation, r.teacher, r.comment]);
-  });
-  return ContentService.createTextOutput(JSON.stringify({ status: 'ok', count: rows.length })).setMimeType(ContentService.MimeType.JSON);
 }</pre>
       </div>
 
@@ -1650,6 +1678,7 @@
       adminEditingTarget: null, // { commentId, studentId, subjectKey }
       adminDeletingTarget: null, // { commentId, studentId, subjectKey }
       pendingTargetAfterLogin: null, // { view: 'teacher_eval', studentId: 'AS-401', subjectKey: 'BM' }
+      // 💡 若部署到 Vercel / GitHub Pages 给多台手机共用，可直接把您的 Apps Script /exec 网址填在下方引号内：
       sheetsWebhookUrl: '',
       lastSheetsSyncTime: '2026-11-15 16:30:00',
       allCommentsLog: [] // Full historical log synced to Google Sheets (unbounded)
@@ -2322,8 +2351,7 @@
           container.innerHTML = `
             <div class="flex items-center gap-1.5 bg-emerald-500/20 border border-emerald-300/40 px-3 py-1.5 rounded-xl text-xs font-semibold text-emerald-100">
               <span>🔓 普通老师：${escapeHtml(state.currentTeacherName)}</span>
-              <button onclick="promptMasterAdminUpgrade()" class="ml-1 px-1.5 py-0.5 rounded bg-amber-400/90 hover:bg-amber-300 text-slate-950 font-bold text-[10px]" title="切换为 Master Admin 以修改或删除评论">👑 升为Admin</button>
-              <button onclick="logoutTeacherSession()" class="px-1.5 py-0.5 rounded bg-black/25 hover:bg-black/40 text-white text-[11px]" title="锁定退出老师评估">锁定</button>
+              <button onclick="logoutTeacherSession()" class="ml-1 px-1.5 py-0.5 rounded bg-black/25 hover:bg-black/40 text-white text-[11px]" title="锁定退出老师评估">锁定</button>
             </div>
           `;
         }
@@ -3487,22 +3515,154 @@
       }
     }
 
-    async function pushRecordToGoogleSheetsWebhook(recordsArray) {
+    function buildRosterPayload() {
+      return {
+        studentsRoster: state.students.map(s => ({
+          id: s.id,
+          name: s.name,
+          grade: s.grade,
+          className: s.className,
+          attendance: s.attendance || '100%',
+          updatedAt: s.updatedAt || '',
+          generalTeacher: s.generalTeacher || '',
+          generalComment: s.generalComment || ''
+        })),
+        teachersRoster: state.teachersList.map(t => ({
+          id: t.id,
+          name: t.name,
+          role: t.role || ''
+        }))
+      };
+    }
+
+    async function pushRecordToGoogleSheetsWebhook(recordsArray, includeRoster = true) {
       const url = (state.sheetsWebhookUrl || '').trim();
       if (!url || !url.startsWith('https://')) return;
       try {
+        const bodyObj = {
+          source: 'ALLSTARS_EDU_DASHBOARD',
+          syncedAt: formatNowTimestamp(),
+          records: Array.isArray(recordsArray) ? recordsArray : []
+        };
+        if (includeRoster) {
+          const rPayload = buildRosterPayload();
+          bodyObj.studentsRoster = rPayload.studentsRoster;
+          bodyObj.teachersRoster = rPayload.teachersRoster;
+        }
         await fetch(url, {
           method: 'POST',
           mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            source: 'ALLSTARS_EDU_DASHBOARD',
-            syncedAt: formatNowTimestamp(),
-            records: recordsArray
-          })
+          body: JSON.stringify(bodyObj)
         });
       } catch (err) {
         // Fallback silently in preview while preserving full local log
+      }
+    }
+
+    async function pullLatestDataFromGoogleSheets(showFeedback = false) {
+      const url = (state.sheetsWebhookUrl || '').trim();
+      if (!url || !url.startsWith('https://')) {
+        if (showFeedback) {
+          openSheetsSyncModal();
+          showToast('请先在此设备填入您的 Google Apps Script 网址以从云端拉取最新学生名单', '☁️');
+        }
+        return;
+      }
+      try {
+        const resp = await fetch(url, { method: 'GET' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        if (data && data.status === 'ok') {
+          let updatedCount = 0;
+
+          // 1. Merge/Sync Teachers Roster from Google Sheets
+          if (Array.isArray(data.teachersRoster) && data.teachersRoster.length > 0) {
+            state.teachersList = data.teachersRoster;
+            saveTeachersListToStorage();
+          }
+
+          // 2. Merge/Sync Students Roster from Google Sheets
+          if (Array.isArray(data.studentsRoster) && data.studentsRoster.length > 0) {
+            const existingMap = new Map(state.students.map(s => [s.id, s]));
+            const mergedStudents = data.studentsRoster.map(remoteStu => {
+              const localStu = existingMap.get(remoteStu.id);
+              if (localStu) {
+                localStu.name = remoteStu.name || localStu.name;
+                localStu.grade = remoteStu.grade || localStu.grade;
+                localStu.className = remoteStu.className || localStu.className;
+                localStu.attendance = remoteStu.attendance || localStu.attendance;
+                localStu.updatedAt = remoteStu.updatedAt || localStu.updatedAt;
+                if (remoteStu.generalTeacher) localStu.generalTeacher = remoteStu.generalTeacher;
+                if (remoteStu.generalComment) localStu.generalComment = remoteStu.generalComment;
+                return localStu;
+              } else {
+                updatedCount++;
+                const defaultSubjs = {};
+                SUBJECTS.forEach(s => {
+                  defaultSubjs[s.key] = {
+                    score: 80,
+                    focus: '良好 👍',
+                    homework: '按时完成 👍',
+                    participation: '积极配合 😊',
+                    teacher: s.defaultTeacher,
+                    updatedAt: remoteStu.updatedAt || formatNowTimestamp(),
+                    comment: '',
+                    history: []
+                  };
+                });
+                return {
+                  id: remoteStu.id,
+                  name: remoteStu.name,
+                  grade: remoteStu.grade || '四年级 (Std 4)',
+                  className: remoteStu.className || '4A 精英班',
+                  attendance: remoteStu.attendance || '100%',
+                  updatedAt: remoteStu.updatedAt || formatNowTimestamp(),
+                  generalTeacher: remoteStu.generalTeacher || '赖老师 (Teacher Lai)',
+                  generalComment: remoteStu.generalComment || '云端同步导入的学生档案。',
+                  subjects: defaultSubjs
+                };
+              }
+            });
+            state.students = mergedStudents;
+          }
+
+          // 3. Merge Comments from Google Sheets
+          if (Array.isArray(data.comments) && data.comments.length > 0) {
+            state.allCommentsLog = data.comments.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+            state.students.forEach(st => {
+              SUBJECTS.forEach(sub => {
+                const subComments = state.allCommentsLog.filter(c => c.studentId === st.id && c.subjectKey === sub.key);
+                if (subComments.length > 0) {
+                  subComments.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+                  const newest = subComments[0];
+                  st.subjects[sub.key] = {
+                    score: newest.score,
+                    focus: newest.focus,
+                    homework: newest.homework,
+                    participation: newest.participation,
+                    teacher: newest.teacher,
+                    updatedAt: newest.timestamp,
+                    comment: newest.comment,
+                    history: subComments
+                  };
+                }
+              });
+            });
+          }
+
+          state.lastSheetsSyncTime = formatNowTimestamp();
+          saveStudentsToStorage();
+          saveSheetsLogToStorage();
+          refreshActiveViewsAfterAdminAction();
+          if (showFeedback) {
+            showToast(`☁️ 已从 Google Sheets 同步最新 ${state.students.length} 名学生与 ${state.allCommentsLog.length} 条评语！`, '✅');
+          }
+        }
+      } catch (err) {
+        if (showFeedback) {
+          showToast('从 Google Sheets 拉取数据时出错，请确认 Apps Script 已部署为「所有人可访问」并包含 doGet 函数', '⚠️');
+        }
       }
     }
 
@@ -3533,8 +3693,9 @@
       state.lastSheetsSyncTime = formatNowTimestamp();
       saveSheetsLogToStorage();
       if (url) {
-        pushRecordToGoogleSheetsWebhook(state.allCommentsLog.slice(0, 5));
-        showToast('已保存 Google Sheets 同步网址并发送测试同步数据！', '☁️');
+        pushRecordToGoogleSheetsWebhook(state.allCommentsLog.slice(0, 5), true);
+        pullLatestDataFromGoogleSheets(true);
+        showToast('已保存 Google Sheets 同步网址并开始双向同步！', '☁️');
       } else {
         showToast('已更新同步设置', '✅');
       }
@@ -3794,6 +3955,7 @@
       });
 
       saveStudentsToStorage();
+      pushRecordToGoogleSheetsWebhook([], true);
       document.getElementById('batchStudentNamesInput').value = '';
       closeAddStudentModal();
       renderRosterView();
@@ -4186,6 +4348,7 @@
 
       saveStudentsToStorage();
       saveSheetsLogToStorage();
+      pushRecordToGoogleSheetsWebhook([], true);
       resetAdminStudentForm();
       renderAdminStudentListTable();
       refreshActiveViewsAfterAdminAction();
@@ -4202,6 +4365,7 @@
       }
 
       saveStudentsToStorage();
+      pushRecordToGoogleSheetsWebhook([], true);
       renderAdminStudentListTable();
       refreshActiveViewsAfterAdminAction();
       showToast(`🗑️ 已移除学生档案：${removed.name} (${removed.id})`, '✅');
@@ -4254,6 +4418,7 @@
       });
 
       saveTeachersListToStorage();
+      pushRecordToGoogleSheetsWebhook([], true);
       if (nameInput) nameInput.value = '';
       if (roleInput) roleInput.value = '';
       renderAdminTeacherList();
@@ -4271,6 +4436,7 @@
       const preservedCount = state.allCommentsLog.filter(c => c.teacher === removed.name).length;
 
       saveTeachersListToStorage();
+      pushRecordToGoogleSheetsWebhook([], true);
       renderAdminTeacherList();
       showToast(`🗑️ 已删除老师账号「${removed.name}」，其过往留下的 ${preservedCount} 条学生评论已完整保留！`, '🛡️');
     }
@@ -4313,6 +4479,9 @@
       loadStateFromStorage();
       updateAuthUI();
       renderRosterView();
+      if (state.sheetsWebhookUrl) {
+        pullLatestDataFromGoogleSheets(false);
+      }
     });
   </script>
 </body>
